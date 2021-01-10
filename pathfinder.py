@@ -241,7 +241,7 @@ if __name__ == "__main__":
 
     path = pf.find_path(start_point, end_point)
     print('Total time: ', time.time() - t)
-    pf.plot(plt, lines_of_sight=True)
+    pf.plot(plt, lines_of_sight=False)
 
     plt.gca().set_aspect('equal')
     plt.show()

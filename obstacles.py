@@ -30,6 +30,7 @@ class Obstacle:
 
 class Vertex(Point):
     next_id = 0
+
     def __init__(self, *args):
         super().__init__(*args)
         self._id = Vertex.next_id
