@@ -3,49 +3,45 @@ import numpy as np
 from collections import defaultdict
 import heapq
 
-from obstacles import Segment, Obstacle
+from obstacles import Segment, Obstacle, Vertex
+
+import rtree
+import time
+
+from scipy.spatial import KDTree
 
 
-class Vertex:
-    def __init__(self, point):
-        self.point = np.array(point)
-        self.lines_of_sight = set()
-
-    def add_lines_of_sight(self, lines_of_sight):
-        self.lines_of_sight.update(lines_of_sight)
-        for line_of_sight in lines_of_sight:
-            if self not in line_of_sight.lines_of_sight:
-                line_of_sight.add_lines_of_sight([self])
-
-    def remove_line_of_sight(self, line_of_sight):
-        self.lines_of_sight.discard(line_of_sight)
-
-    def detach(self):
-        while self.lines_of_sight:
-            line_of_sight = self.lines_of_sight.pop()
-            line_of_sight.remove_line_of_sight(self)
-
-    def __repr__(self):
-        return str(self.point)
+def close_pass_cost(distance):
+    if distance == 0:
+        cost = np.Inf
+    else:
+        cost = max(0, -np.log(distance * 10))
+    return cost
 
 
 class Pathfinder:
-    def __init__(self, blocking_segments=None):
-        self.blocking_segments = blocking_segments or set()
-        self.vertices = set()
+    def __init__(self):
+        self.blocking_segments = []
+        self.segment_index = rtree.index.Index()
+        self.vertices = []
+        self.kd_tree = None
         self.start_node = None
         self.end_node = None
         self.path = None
 
     def add_obstacle(self, obstacle):
         if isinstance(obstacle, Obstacle):
-            self.blocking_segments.update(obstacle.segments)
+            t = time.time()
+            segments = obstacle.segments
+            for segment in segments:
+                self.segment_index.insert(len(self.blocking_segments), segment.bounds)
+                self.blocking_segments.append(segment)
 
             for np_vertex in obstacle.vertices:
                 vertex = Vertex(np_vertex)
-                self.vertices.add(vertex)
-                vertex.add_lines_of_sight(
-                    self.find_lines_of_sight(vertex))
+                self.add_vertex(vertex)
+            print('Time to add obstacle: ', time.time() - t)
+
         else:
             raise ValueError(obstacle)
 
@@ -57,16 +53,24 @@ class Pathfinder:
                 continue
 
             has_line_of_sight = True
-            for segment in self.blocking_segments:
-                if segment.intersects([vertex.point, possible_vertex.point]):
+            closest_pass = np.Inf
+
+            path = Segment([vertex, possible_vertex])
+            for index in self.segment_index.intersection(path.bounds):
+                segment = self.blocking_segments[index]
+
+                if segment.intersects(path):
                     has_line_of_sight = False
                     break
+                else:
+                    distance = max(0, segment.distance(path))
+                    closest_pass = min(closest_pass, distance)
 
             if has_line_of_sight:
-                lines_of_sight.add(possible_vertex)
+                cost = close_pass_cost(closest_pass)
+                lines_of_sight.add((possible_vertex, cost))
             else:
                 possible_vertex.remove_line_of_sight(vertex)
-
         return lines_of_sight
 
     def find_path(self, start_point=None, end_point=None):
@@ -81,26 +85,45 @@ class Pathfinder:
                 'both start_node and end_node must be defined on the class'
                 ' or passed as parameters')
 
+        t = time.time()
         self.path = self.a_star(self.start_node, self.end_node)
-        print(self.path)
+        print('Time to find path: ', time.time() - t)
         return self.path
 
     def add_vertex(self, node):
         if not isinstance(node, Vertex):
             node = Vertex(node)
 
-        self.vertices.add(node)
+        point = node.coords[0]
+        
+        if self.kd_tree is not None:
+            d, i = self.kd_tree.query(point)
+            if np.isclose(d, 0):
+                # same point
+                self.vertices[i].detach()
+                self.vertices.pop(i)
+
+        self.vertices.append(node)
+        self.kd_tree = KDTree([v.coords[0] for v in self.vertices])
         node.add_lines_of_sight(self.find_lines_of_sight(node))
         return node
 
     def set_start_node(self, node):
         if self.start_node:
+            try:
+                self.vertices.remove(self.start_node)
+            except ValueError:
+                pass
             self.start_node.detach()
         node = self.add_vertex(node)
         self.start_node = node
 
     def set_end_node(self, node):
         if self.end_node:
+            try:
+                self.vertices.remove(self.end_node)
+            except ValueError:
+                pass
             self.end_node.detach()
         node = self.add_vertex(node)
         self.end_node = node
@@ -110,7 +133,7 @@ class Pathfinder:
         if lines_of_sight:
             for v in self.vertices:
                 for v2 in v.lines_of_sight:
-                    points = np.array([v.point, v2.point])
+                    points = np.array([v.coords[0], v2.coords[0]])
                     plt.plot(points[:, 0], points[:, 1],
                              '-', color='lightgrey')
 
@@ -119,15 +142,18 @@ class Pathfinder:
                 segment.plot(plt, 'red')
 
         if path and self.path:
-            path_points = np.array([node.point for node in self.path])
+            path_points = np.array([p.coords[0] for p in self.path])
             plt.plot(
                 path_points[:, 0], path_points[:, 1],
-                '-', color='black')
+                '-', color='blue')
+
+        if self.start_node:
             plt.plot(
-                self.start_node.point[0], self.start_node.point[1],
+                self.start_node.coords[0][0], self.start_node.coords[0][1],
                 'o', color='green')
+        if self.end_node:
             plt.plot(
-                self.end_node.point[0], self.end_node.point[1],
+                self.end_node.coords[0][0], self.end_node.coords[0][1],
                 'o', color='blue')
 
     @classmethod
@@ -146,7 +172,7 @@ class Pathfinder:
         https://en.wikipedia.org/wiki/A*_search_algorithm
         """
         def d(a, b):
-            return np.linalg.norm(b.point - a.point)
+            return a.distance(b)
 
         def h(node):
             return d(node, goal)
@@ -179,7 +205,8 @@ class Pathfinder:
 
             heapq.heappop(open_set)
             for neighbour in current.lines_of_sight:
-                tentative_g_score = g_score[current] + d(current, neighbour)
+                cost = current.costs[neighbour]
+                tentative_g_score = g_score[current] + d(current, neighbour) + cost
                 if tentative_g_score < g_score[neighbour]:
                     came_from[neighbour] = current
                     g_score[neighbour] = tentative_g_score
@@ -195,22 +222,22 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from obstacles import Circle
 
+    t = time.time()
     pf = Pathfinder()
 
-    # c = Circle((-0.1, 0), 0.25)
-    # l1 = Segment((-0.75, -0.5), (-0.4, 0.8))
-    # l2 = Segment((-0.4, 0.8), (0.5, 0.3))
-    # pf.add_obstacle(c)
-    # pf.add_obstacle(l1)
-    # pf.add_obstacle(l2)
+    obstacles = [
+        Circle((-0.4, 0.12), 0.25),
+        Circle((0.4, -0.12), 0.25),
+    ]
 
     start_point = np.array((-1, 0))
     end_point = np.array((1, 0))
 
-    l = Segment((0, -1), (0, 1))
-    pf.add_obstacle(l)
+    for o in obstacles:
+        pf.add_obstacle(o)
 
     path = pf.find_path(start_point, end_point)
+    print('Total time: ', time.time() - t)
     pf.plot(plt, lines_of_sight=True)
 
     plt.gca().set_aspect('equal')

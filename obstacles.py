@@ -1,12 +1,14 @@
 import numpy as np
 
-from utils import segments_intersect
+from utils import segments_intersect, closestDistanceBetweenLines
+
+from shapely.geometry import Polygon as SPolygon, LineString, Point
 
 
-def point_cloud(point, r=0.1, n=1):
-    points = [point]
+def point_cloud(point, r=0.1, n=1, is_inside=lambda p: False):
+    points = []
     for i in range(n):
-        points += Polygon.regular_polygon(point, r * (i + 1), 6 + (n - i))
+        points += [p for p in Polygon.regular_polygon(point, r * (i + 1), 5 + (n - i)) if not is_inside(p)]
 
     return points
 
@@ -21,59 +23,83 @@ class Obstacle:
         raise NotImplementedError()
 
 
-class Segment(Obstacle):
-    def __init__(self, point_a, point_b):
-        self.point_a = np.array(point_a)
-        self.point_b = np.array(point_b)
+class Vertex(Point):
+    next_id = 0
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._id = Vertex.next_id
+        Vertex.next_id += 1
+        self.lines_of_sight = []
+        self.costs = {}
 
-    @property
-    def vertices(self):
-        points = []
-        for point in [self.point_a, self.point_b]:
-            points.extend(point_cloud(point))
-        return points
+    def add_lines_of_sight(self, lines_of_sight):
+        for line_of_sight, cost in lines_of_sight:
+            self.lines_of_sight.append(line_of_sight)
+            self.costs[line_of_sight] = cost
+            if self not in line_of_sight.lines_of_sight:
+                line_of_sight.add_lines_of_sight([(self, cost)])
 
+    def remove_line_of_sight(self, line_of_sight):
+        try:
+            self.lines_of_sight.remove(line_of_sight)
+        except ValueError:
+            pass
+        self.costs.pop(line_of_sight, None)
+
+    def detach(self):
+        while self.lines_of_sight:
+            line_of_sight = self.lines_of_sight.pop()
+            line_of_sight.remove_line_of_sight(self)
+
+    def __hash__(self):
+        return self._id
+
+
+class Segment(LineString, Obstacle):    
     @property
     def segments(self):
         return [self]
-
-    def plot(self, plt, color='r'):
-        points = np.array([self.point_a, self.point_b])
-        plt.plot(points[:, 0], points[:, 1], color=color)
-
-    def intersects(self, points):
-        a1 = self.point_a
-        a2 = self.point_b
-        if isinstance(points, Segment):
-            b1 = points.point_a
-            b2 = points.point_b
-        else:
-            b1, b2 = points
-
-        return segments_intersect(a1, a2, b1, b2)
-
-
-class Polygon(Obstacle):
-    def __init__(self, points):
-        self.points = [np.array(point) for point in points]
     
     @property
     def vertices(self):
         points = []
-        for point in self.points:
+        for point in self.coords:
             points.extend(point_cloud(point))
         return points
+
+    def intersects(self, other):
+        other = Segment(other)
+        return super(LineString, self).intersects(other)
+
+    def distance(self, other):
+        other = Segment(other)
+        return super(LineString, self).distance(other)
+
+    def plot(self, plt, color='r'):
+        points = np.array(self.coords)
+        plt.plot(points[:, 0], points[:, 1], color=color)
+
+
+class Polygon(SPolygon, Obstacle):
+    def __init__(self, coordinates):
+        super().__init__(coordinates)
 
     @property
     def segments(self):
         segments = []
-
-        n = len(self.points)
-        for i, point_a in enumerate(self.points):
-            point_b = self.points[(i + 1) % n]
-            segments.append(Segment(point_a, point_b))
-    
+        for i in range(len(self.exterior.coords) - 1):
+            segments.append(
+                Segment([self.exterior.coords[i], self.exterior.coords[i + 1]]))
         return segments
+
+
+    @property
+    def vertices(self):
+        points = []
+        for point in self.exterior.coords:
+            points.extend(point_cloud(
+                point, is_inside=lambda p: self.intersects(Point(p))))
+        return points
 
     @staticmethod
     def regular_polygon(center, radius, sides):
@@ -88,10 +114,8 @@ class Polygon(Obstacle):
 
 
 class Circle (Polygon):
-    def __init__(self, center, radius, n=12):
+    def __init__(self, center, radius, n=10):
         self.center = np.array(center)
         self.radius = radius
-
-        outer_radius = self.radius / np.cos(np.pi / n)
-        super().__init__(self.regular_polygon(center, outer_radius, n))
-    
+        self.outer_radius = self.radius / np.cos(np.pi / n)
+        super().__init__(self.regular_polygon(center, self.outer_radius, n))
