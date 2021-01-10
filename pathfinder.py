@@ -132,6 +132,7 @@ class Pathfinder:
 
     @classmethod
     def a_star(cls, start, goal):
+        """Based on pseudocode from https://en.wikipedia.org/wiki/A*_search_algorithm"""
         def d (a, b):
             return np.linalg.norm(b.point - a.point)
 
@@ -193,11 +194,10 @@ if __name__ == "__main__":
     pf.add_obstacle(l2)
 
     start_point = np.array((-1, 0))
-    end_point = np.array((0.4, 0.1))
+    end_point = np.array((-0.05, 0.3))
 
     path = pf.find_path(start_point, end_point)
     pf.plot(plt)
 
     plt.gca().set_aspect('equal')
-    plt.savefig('./images/example.png')
     plt.show()
