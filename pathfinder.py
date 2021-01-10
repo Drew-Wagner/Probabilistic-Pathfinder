@@ -48,10 +48,12 @@ class Pathfinder:
     def find_lines_of_sight(self, vertex):
         lines_of_sight = set()
 
+        t = time.time()
+        vertices_considered = 0
         for possible_vertex in self.vertices:
             if possible_vertex == vertex or vertex in possible_vertex.lines_of_sight:
                 continue
-
+            vertices_considered += 1
             has_line_of_sight = True
             closest_pass = np.Inf
 
@@ -71,6 +73,7 @@ class Pathfinder:
                 lines_of_sight.add((possible_vertex, cost))
             else:
                 possible_vertex.remove_line_of_sight(vertex)
+
         return lines_of_sight
 
     def find_path(self, start_point=None, end_point=None):

@@ -5,10 +5,15 @@ from utils import segments_intersect, closestDistanceBetweenLines
 from shapely.geometry import Polygon as SPolygon, LineString, Point
 
 
-def point_cloud(point, r=0.1, n=1, is_inside=lambda p: False):
+def point_cloud(point, radius=0.1, n=6, is_inside=lambda p: False):
+    delta = 2 * np.pi / n
+    
     points = []
-    for i in range(n):
-        points += [p for p in Polygon.regular_polygon(point, r * (i + 1), 5 + (n - i)) if not is_inside(p)]
+    for theta in np.arange(0, 2*np.pi, delta):
+        d = np.array([np.cos(theta), np.sin(theta)]) * radius
+        p = point + d
+        if not is_inside(p):
+            points.append(p)
 
     return points
 
@@ -29,19 +34,19 @@ class Vertex(Point):
         super().__init__(*args)
         self._id = Vertex.next_id
         Vertex.next_id += 1
-        self.lines_of_sight = []
+        self.lines_of_sight = set()
         self.costs = {}
 
     def add_lines_of_sight(self, lines_of_sight):
         for line_of_sight, cost in lines_of_sight:
-            self.lines_of_sight.append(line_of_sight)
+            self.lines_of_sight.add(line_of_sight)
             self.costs[line_of_sight] = cost
             if self not in line_of_sight.lines_of_sight:
                 line_of_sight.add_lines_of_sight([(self, cost)])
 
     def remove_line_of_sight(self, line_of_sight):
         try:
-            self.lines_of_sight.remove(line_of_sight)
+            self.lines_of_sight.discard(line_of_sight)
         except ValueError:
             pass
         self.costs.pop(line_of_sight, None)
