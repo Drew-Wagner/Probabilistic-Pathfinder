@@ -1,13 +1,22 @@
+# cython: language_level=3, boundscheck=False, cdivision=True, wraparound=False
+
 import numpy as np
+cimport numpy as np
 
 from utils import segments_intersect, closestDistanceBetweenLines
 
 from shapely.geometry import Polygon as SPolygon, LineString, Point
 
+import shapely.prepared
 
-def point_cloud(point, radius=0.1, n=6, is_inside=lambda p: False):
+
+cdef point_cloud((double, double) point_tuple, is_inside=lambda p: False, double radius=0.1, int n=6):
+    cdef double delta, theta
+    cdef np.ndarray d, p
+    cdef list points
+    cdef np.ndarray point = np.array(point_tuple)
     delta = 2 * np.pi / n
-    
+
     points = []
     for theta in np.arange(0, 2*np.pi, delta):
         d = np.array([np.cos(theta), np.sin(theta)]) * radius
@@ -46,10 +55,7 @@ class Vertex(Point):
                 line_of_sight.add_lines_of_sight([(self, cost)])
 
     def remove_line_of_sight(self, line_of_sight):
-        try:
-            self.lines_of_sight.discard(line_of_sight)
-        except ValueError:
-            pass
+        self.lines_of_sight.discard(line_of_sight)
         self.costs.pop(line_of_sight, None)
 
     def detach(self):
@@ -62,12 +68,16 @@ class Vertex(Point):
 
 
 class Segment(LineString, Obstacle):    
+    def __init__(self, *args):
+        super().__init__(*args)
+
     @property
     def segments(self):
         return [self]
     
     @property
     def vertices(self):
+        cdef list points
         points = []
         for point in self.coords:
             points.extend(point_cloud(point))

@@ -1,4 +1,7 @@
+# cython: language_level=3, boundscheck=False, cdivisio=True
+
 import numpy as np
+cimport numpy as np
 
 from collections import defaultdict
 import heapq
@@ -11,10 +14,9 @@ import time
 from scipy.spatial import KDTree
 
 
-def close_pass_cost(distance):
-    if distance == 0:
-        cost = np.Inf
-    else:
+cdef close_pass_cost(double distance):
+    cdef double cost = np.Inf
+    if distance != 0:
         cost = max(0, -np.log(distance * 10))
     return cost
 
@@ -46,10 +48,14 @@ class Pathfinder:
             raise ValueError(obstacle)
 
     def find_lines_of_sight(self, vertex):
-        lines_of_sight = set()
+        cdef set lines_of_sight = set()
+        cdef double t = time.time()
+        cdef int vertices_considered = 0
+        cdef double closest_pass
+        cdef int has_line_of_sight
+        cdef double distance
+        cdef int index
 
-        t = time.time()
-        vertices_considered = 0
         for possible_vertex in self.vertices:
             if possible_vertex == vertex or vertex in possible_vertex.lines_of_sight:
                 continue
@@ -160,31 +166,16 @@ class Pathfinder:
                 'o', color='blue')
 
     @classmethod
-    def reconstruct_path(cls, came_from, current):
-        total_path = [current]
-        while current in came_from:
-            current = came_from[current]
-            total_path.insert(0, current)
-
-        return total_path
-
-    @classmethod
     def a_star(cls, start, goal):
         """
         Based on pseudocode from:
         https://en.wikipedia.org/wiki/A*_search_algorithm
         """
-        def d(a, b):
-            return a.distance(b)
-
-        def h(node):
-            return d(node, goal)
-
         g_score = defaultdict(lambda: np.Inf)
         g_score[start] = 0
 
         f_score = defaultdict(lambda: np.Inf)
-        f_score[start] = h(start)
+        f_score[start] = start.distance(goal)
 
         class heap_node:
             def __init__(self, node):
@@ -204,21 +195,28 @@ class Pathfinder:
         while open_set:
             current = open_set[0].node
             if current == goal:
-                return cls.reconstruct_path(came_from, current)
+                break
 
             heapq.heappop(open_set)
             for neighbour in current.lines_of_sight:
                 cost = current.costs[neighbour]
-                tentative_g_score = g_score[current] + d(current, neighbour) + cost
+                tentative_g_score = g_score[current] + current.distance(neighbour) + cost
                 if tentative_g_score < g_score[neighbour]:
                     came_from[neighbour] = current
                     g_score[neighbour] = tentative_g_score
-                    f_score[neighbour] = g_score[neighbour] + h(neighbour)
+                    f_score[neighbour] = g_score[neighbour] + neighbour.distance(goal)
 
                     if neighbour not in open_set:
                         heapq.heappush(open_set, heap_node(neighbour))
+        else:
+            return None
 
-        return None
+        total_path = [current]
+        while current in came_from:
+            current = came_from[current]
+            total_path.insert(0, current)
+
+        return total_path
 
 
 if __name__ == "__main__":
@@ -240,6 +238,7 @@ if __name__ == "__main__":
         pf.add_obstacle(o)
 
     path = pf.find_path(start_point, end_point)
+    
     print('Total time: ', time.time() - t)
     pf.plot(plt, lines_of_sight=False)
 
