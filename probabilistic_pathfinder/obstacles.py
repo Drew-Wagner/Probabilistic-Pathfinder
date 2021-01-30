@@ -1,6 +1,6 @@
 import numpy as np
 
-from intersections import moller_trumbore_ray_triangle_intersects
+from .intersections import moller_trumbore_ray_triangle_intersects
 
 
 class Obstacle:
@@ -9,6 +9,9 @@ class Obstacle:
         self.min, self.max = self.bounds[:3], self.bounds[3:]
         self.triangles = []
         self.vertices = []
+
+    def sample(self):
+        raise NotImplementedError()
 
     def within(self, point: np.ndarray):
         if not isinstance(point, np.ndarray):
@@ -63,6 +66,23 @@ class Cylinder(Obstacle):
         super().__init__((*self.min, *self.max))
 
         self.calculate_triangles()
+
+    def sample(self):
+        angle = np.random.uniform(0, 2 * np.pi)
+        height = np.random.uniform(
+            0, self.height) + np.abs(np.random.normal(0, self.radius))
+        if height <= self.height:
+            radius = self.radius + \
+                np.abs(np.random.normal(0, self.radius))
+        else:
+            dh = height - self.height
+            radius = (self.radius**2 - dh**2) ** 0.5
+
+        point = np.zeros((3,))
+        point[0] = radius * np.cos(angle) + self.point[0]
+        point[1] = radius * np.sin(angle) + self.point[1]
+        point[2] = height
+        return point
 
     def within(self, point):
         if not isinstance(point, np.ndarray):

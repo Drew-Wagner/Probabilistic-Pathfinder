@@ -1,12 +1,9 @@
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
-
 import numpy as np
 
 import rtree
 from rtree.index import Property
 
-from obstacles import Obstacle, Cylinder
+from .obstacles import Obstacle
 
 import heapq
 from collections import defaultdict
@@ -48,7 +45,8 @@ class SearchSpace:
     def intersects(self, a: np.ndarray, b: np.ndarray):
         a, b = np.array(a), np.array(b)
         b_minus_a = b - a
-        if self.within(b_minus_a / 2):
+
+        if not self.is_free((a + b) / 2):
             return True
 
         min_x, max_x = min(a[0], b[0]), max(a[0], b[0])
@@ -76,15 +74,10 @@ class SearchSpace:
                 sample_count += 1
         return samples
 
-    def _insert_vertex(self, idx, point: np.ndarray):
-        self.vertices[idx] = point
-        self.edges[idx] = set()
-        self.vertex_index.insert(idx, tuple(point))
-
-    def add_vertex(self, idx, point: np.ndarray):
+    def add_vertex(self, idx, point: np.ndarray, k=8):
         self.remove_vertex(idx)
-        self._insert_vertex(idx, point)
-        self._integrate_vertex(idx)
+        if not self._integrate_vertex(idx, point, k):
+            raise Exception(f'Could not add vertex {point} ({idx}) to graph')
 
     def detach_vertex(self, idx):
         if idx not in self.edges:
@@ -95,16 +88,27 @@ class SearchSpace:
         self.edges[idx].clear()
 
     def remove_vertex(self, idx):
-        self.detach_vertex(idx)
         self.vertices.pop(idx, None)
+        self.vertex_index.delete(idx, self.bounds)
+        self.detach_vertex(idx)
         self.edges.pop(idx, None)
 
-    def _integrate_vertex(self, idx, k=8):
-        point = self.vertices[idx]
-        neighbours = self.vertex_index.nearest(tuple(point), k)
+    def _integrate_vertex(self, idx, point, k=8):
+        neighbours = list(self.vertex_index.nearest(tuple(point), k))
+        connected = not bool(len(neighbours))
+
+        self.edges[idx] = set()
+
         for neighbour_idx in neighbours:
-            if neighbour_idx not in self.edges[idx]:
-                self._try_connect(idx, neighbour_idx, point=point)
+            connected |= self._try_connect(idx, neighbour_idx, point=point)
+
+        if connected:
+            self.vertices[idx] = point
+            self.vertex_index.insert(idx, tuple(point))
+        else:
+            self.edges.pop(idx)
+
+        return connected
 
     def _try_connect(self, idx, nidx, point=None):
         if point is None:
@@ -113,27 +117,34 @@ class SearchSpace:
         if not self.intersects(point, neighbour):
             self.edges[idx].add(nidx)
             self.edges[nidx].add(idx)
+            return True
+        else:
+            return False
 
-    def _construct_nodes(self, n):
-        samples = self.free_samples(n)  # Random Uniform
-
-        # # Uniform spacing
-        # x = np.linspace(self.min[0], self.max[0], int(n**(1/3)))
-        # y = np.linspace(self.min[1], self.max[1], int(n**(1/3)))
-        # z = np.linspace(self.min[2], self.max[2], int(n**(1/3)))
+    def construct(self, n=100, k=8):
+        # Uniform spacing
+        # x = np.random.uniform(self.min[0], self.max[0], int(x))
+        # y = np.random.uniform(self.min[1], self.max[1], int(y))
+        # z = np.linspace(self.min[2], self.max[2], int(z))
 
         # X, Y, Z = np.meshgrid(x, y, z)
         # samples = np.dstack([X.ravel(), Y.ravel(), Z.ravel()])[0]
-        for idx, point in enumerate(samples):
-            self._insert_vertex(idx, point)
+        # samples = list(self.free_samples(n))  # Random Uniform
 
-    def construct(self, n=500, k=8):
-        self._construct_nodes(n)
+        idx = 0
+        iobst = 0
+        while idx < n:
+            # if idx > n:
+            obst = self.obstacles[iobst % len(self.obstacles)]
+            point = obst.sample()
+            # else:
+            #     point = self.free_samples(1)[0]
+            if self.within(point):
+                if self._integrate_vertex(idx, point, k):
+                    idx += 1
+            iobst += 1
 
-        for idx in self.vertices:
-            self._integrate_vertex(idx, k=k)
-
-    def plot(self, ax, vertices=False, graph=True):
+    def plot(self, ax, obstacles=True, vertices=False, graph=True):
         if hasattr(self, 'bounds'):
             min_x, min_y, min_z = self.min
             max_x, max_y, max_z = self.max
@@ -141,8 +152,9 @@ class SearchSpace:
             ax.set_ylim(min_y, max_y)
             ax.set_zlim(min_z, max_z)
 
-        for obstacle in self.obstacles.values():
-            obstacle.plot(ax)
+        if obstacles:
+            for obstacle in self.obstacles.values():
+                obstacle.plot(ax)
 
         if graph:
             drawn_edges = set()
@@ -219,16 +231,17 @@ class SearchSpace:
 
         return total_path
 
-    def find_path(self, point_a, *points, plot=None):
-        self.add_vertex(-1, point_a)
-        for i, point in enumerate(points):
+    def find_path(self, *points, plot=None):
+        self.add_vertex(-1, points[0])
+        for i, point in enumerate(points[1:]):
             self.add_vertex(-(i + 2), point)
 
         path = []
-        for i in range(len(points)):
+        for i in range(len(points) - 1):
             self._try_connect(-(i + 1), -(i + 2))
             partial_path = self._astar(-(i + 1), -(i + 2))
             if partial_path is None:
+                print('NO PATH')
                 return None
             partial_path = self.refine_path(partial_path)
             path.extend(partial_path)
@@ -240,21 +253,49 @@ class SearchSpace:
 
     def refine_path(self, path):
         path = list(path)
-        popped = True
-        while popped:
-            popped = False
-            current_idx = 0
-            while current_idx < len(path) - 2:
-                current = path[current_idx]
-                next_ = path[current_idx + 2]
-                point_a = self.vertices[current]
-                point_b = self.vertices[next_]
 
-                if not self.intersects(point_a, point_b):
-                    popped = True
-                    path.pop(current_idx + 1)
-                else:
-                    current_idx += 1
+        i = 0
+        while i < len(path) - 1:
+            current = path[i]
+            j = len(path) - 1
+            while j > i:
+                test = path[j]
+                if self._try_connect(current, test):
+                    del path[i + 1: j]
+                j -= 1
+            i += 1
+
+        # Smooth along y-axis
+        if len(path) > 2:
+            a = self.vertices[path[0]]
+            b = self.vertices[path[-1]]
+            v = b - a
+            l = np.linalg.norm(v)
+            v /= l
+            for i in range(1, len(path) - 1):
+                current = path[i]
+                previous_point = self.vertices[path[i - 1]]
+                next_point = self.vertices[path[i + 1]]
+                point = self.vertices[current]
+                v1 = point - a
+                v1 /= 2
+                t = np.dot(v, v1)
+                t = min(1, max(0, t))
+                p = a + v * t * l
+                adjusted_point = np.copy(point)
+                adjusted_point[2] = p[2]
+                its = 0
+                while not self.is_free(adjusted_point) or \
+                        self.intersects(
+                        adjusted_point, previous_point) or \
+                        self.intersects(adjusted_point, next_point):
+                    adjusted_point = (point + adjusted_point) / 2
+                    if its > 8:
+                        adjusted_point = point
+                        break
+                    its += 1
+
+                point[2] = adjusted_point[2]
 
         return path
 
@@ -274,39 +315,9 @@ class BoxSearchSpace(SearchSpace):
         self.min, self.max = self.bounds[:3], self.bounds[3:]
 
     def within(self, point: np.ndarray):
-        return (self.min <= point).all() and (point < self.max).all()
+        return (self.min <= point).all() and (point <= self.max).all()
 
     def sample(self):
         return np.random.uniform(
             low=self.min,
             high=self.max)
-
-
-if __name__ == "__main__":
-    import time
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-
-    box = BoxSearchSpace()
-
-    for i in range(10):
-        p = np.random.uniform(size=(3,))
-        p[2] = 0
-        cyl = Cylinder(p, np.random.uniform(low=0.01, high=0.2),
-                    np.random.uniform(low=0.05))
-        box.insert_obstacle(cyl)
-
-    t = time.time()
-    box.construct(n=500)
-    print("Time to construct", time.time() - t)
-
-    a = np.array((0, 0, 0.5))
-    b = np.array((0.5, 0.5, 0.5))
-    c = np.array((0, 1, 0.5))
-    box.plot(ax, graph=False, vertices=False)
-
-    t = time.time()
-    path = box.find_path(a, b, c, plot=ax)
-    print("Time to find path", time.time() - t)
-    plt.show()
