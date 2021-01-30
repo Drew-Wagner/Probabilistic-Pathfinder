@@ -1,7 +1,7 @@
 # Probabilistic Pathfinder
 A 3D probabilistic pathfinder built for the 2021 AUVSI-SUAS UAV competition.
 
-# Obstacles
+## Obstacles
 Currently only box search spaces and cylinderical obstacles are supported.
 
 Obstacles are represented by triangular meshes. This allows efficient line segment intersections
