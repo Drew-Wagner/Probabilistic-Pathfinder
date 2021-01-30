@@ -122,23 +122,11 @@ class SearchSpace:
             return False
 
     def construct(self, n=100, k=8):
-        # Uniform spacing
-        # x = np.random.uniform(self.min[0], self.max[0], int(x))
-        # y = np.random.uniform(self.min[1], self.max[1], int(y))
-        # z = np.linspace(self.min[2], self.max[2], int(z))
-
-        # X, Y, Z = np.meshgrid(x, y, z)
-        # samples = np.dstack([X.ravel(), Y.ravel(), Z.ravel()])[0]
-        # samples = list(self.free_samples(n))  # Random Uniform
-
         idx = 0
         iobst = 0
         while idx < n:
-            # if idx > n:
             obst = self.obstacles[iobst % len(self.obstacles)]
             point = obst.sample()
-            # else:
-            #     point = self.free_samples(1)[0]
             if self.within(point):
                 if self._integrate_vertex(idx, point, k):
                     idx += 1
@@ -252,14 +240,17 @@ class SearchSpace:
         return path
 
     def refine_path(self, path):
+        """Attempts to refine the path to be more straight"""
         path = list(path)
 
+        # Check to see if there are any corners to "cut"
         i = 0
         while i < len(path) - 1:
             current = path[i]
             j = len(path) - 1
             while j > i:
                 test = path[j]
+                # If the connection is successful, future paths may re-use it
                 if self._try_connect(current, test):
                     del path[i + 1: j]
                 j -= 1
@@ -267,43 +258,63 @@ class SearchSpace:
 
         # Smooth along y-axis
         if len(path) > 2:
-            a = self.vertices[path[0]]
-            b = self.vertices[path[-1]]
-            v = b - a
-            l = np.linalg.norm(v)
-            v /= l
-            for i in range(1, len(path) - 1):
-                current = path[i]
-                previous_point = self.vertices[path[i - 1]]
-                next_point = self.vertices[path[i + 1]]
-                point = self.vertices[current]
-                v1 = point - a
-                v1 /= 2
-                t = np.dot(v, v1)
-                t = min(1, max(0, t))
-                p = a + v * t * l
-                adjusted_point = np.copy(point)
-                adjusted_point[2] = p[2]
-                its = 0
-                while not self.is_free(adjusted_point) or \
-                        self.intersects(
-                        adjusted_point, previous_point) or \
-                        self.intersects(adjusted_point, next_point):
-                    adjusted_point = (point + adjusted_point) / 2
-                    if its > 8:
-                        adjusted_point = point
-                        break
-                    its += 1
-
-                point[2] = adjusted_point[2]
+            self._smooth_path(path)
 
         return path
+
+    def _smooth_path(self, path, max_iterations=8):
+        """Attempts to eliminate unnecessary vertical travel away from the straight-line path."""
+
+        # TODO Duplicate the vertices instead of moving them inplace
+
+        # Determine the straight line path
+        point_a = self.vertices[path[0]]
+        point_b = self.vertices[path[-1]]
+        vector = point_b - point_a
+        length = np.linalg.norm(vector)
+        vector /= length
+
+        # Attempt to adjust every point along the path except the first and last ones
+        for i in range(1, len(path) - 1):
+            current = path[i]
+            previous_point = self.vertices[path[i - 1]]
+            next_point = self.vertices[path[i + 1]]
+            point = self.vertices[current]
+
+            # Find the closest point along the straight line path
+            v = point - point_a
+            v /= length
+            t = np.dot(vector, v)
+            t = min(1, max(0, t))
+            closest_point = point_a + v * t * length
+            target_height = closest_point[2]
+            adjusted_point = np.copy(point)
+
+            # Binary search to find the best height to place the point at
+            iterations = 0
+            while iterations < max_iterations and not np.isclose(point[2] - target_height, 0):
+                iterations += 1
+
+                # Take the height between the target height and the current height
+                adjusted_point[2] = (point[2] + target_height) / 2
+
+                # Check that the adjustment does not cause any collisions
+                if self.is_free(adjusted_point) and \
+                        not self.intersects(
+                            adjusted_point, previous_point) and \
+                        not self.intersects(adjusted_point, next_point):
+                    # Move the point to the adjusted height (Will search below next iteration)
+                    point[2] = adjusted_point[2]
+                else:
+                    # Otherwise adjust the target height (Will search above next iteration)
+                    target_height = adjusted_point[2]
 
     def _plot_path(self, ax, path):
         points = np.array([
             self.vertices[p] for p in path
         ])
         ax.plot(points[:, 0], points[:, 1], points[:, 2])
+        ax.plot(points[[0, -1], 0], points[[0, -1], 1], points[[0, -1], 2])
         ax.scatter(points[:, 0], points[:, 1], points[:, 2])
 
 
