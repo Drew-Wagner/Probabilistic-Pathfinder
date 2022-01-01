@@ -14,9 +14,6 @@ import time
 
 print(np.random.seed(43))
 
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-
 box = BoxSearchSpace()
 
 while len(box.obstacles) < 10:
@@ -35,13 +32,14 @@ t = time.time()
 box.construct(n=100, k=6)
 print("Time to construct", time.time() - t)
 
-box.plot(ax, obstacles=True, graph=False, vertices=False)
+for i in range(100):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
 
-a = np.array([0, 0, 0.25])
-b = np.array([1, 1, 0.5])
+    a, b = box.free_samples(2)
+    box.plot(ax, obstacles=True, graph=False, vertices=False)
+    t = time.time()
+    path = box.find_path(a, b, plot=ax)
+    print("Time to find path", time.time() - t)
+    plt.show()
 
-t = time.time()
-path = box.find_path(a, b, plot=ax)
-
-print("Time to find path", time.time() - t)
-plt.show()
